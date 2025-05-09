@@ -1,0 +1,242 @@
+---
+title: "Slesvig_Holsten_Wars_Sentiment"
+author: "Katrine Pedersen"
+date: "r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE)
+#Pakker
+
+library(tidyverse)
+library(here)
+library(pdftools)
+library(tidytext)
+library(textdata) 
+library(ggwordcloud)
+library(ggplot2)
+library(readr)
+library(lubridate)
+```
+
+```{r hent_stopord}
+
+# Henter stopord (fra Max Odsbjerg)
+stopord_1800 <- read_csv("https://gist.githubusercontent.com/maxodsbjerg/1537cf14c3d46b3d30caa5d99f8758e9/raw/9f044a38505334f035be111c9a3f654a24418f6d/stopord_18_clean.csv")
+```
+
+```{r hent_avisdata}
+##Hent og klargør data:
+
+link48_51 <- "https://labs.statsbiblioteket.dk/labsapi/api/aviser/export/fields?query=Slesvig%20AND%20krig%20py%3A%5B1848%20TO%201851%5D&fields=link&fields=recordID&fields=timestamp&fields=pwa&fields=cer&fields=fulltext_org&fields=pageUUID&fields=editionUUID&fields=titleUUID&fields=editionId&fields=familyId&fields=newspaper_page&fields=newspaper_edition&fields=lplace&fields=location_name&fields=location_coordinates&max=-1&structure=header&structure=content&format=CSV"
+
+link64_65 <- "https://labs.statsbiblioteket.dk/labsapi/api/aviser/export/fields?query=Slesvig%20AND%20krig%20py%3A%5B1864%20TO%201865%5D&fields=link&fields=recordID&fields=timestamp&fields=pwa&fields=cer&fields=fulltext_org&fields=pageUUID&fields=editionUUID&fields=titleUUID&fields=editionId&fields=familyId&fields=newspaper_page&fields=newspaper_edition&fields=lplace&fields=location_name&fields=location_coordinates&max=-1&structure=header&structure=content&format=CSV"
+
+link48_65 <- "https://labs.statsbiblioteket.dk/labsapi/api/aviser/export/fields?query=Slesvig%20AND%20krig%20py%3A%5B1848%20TO%201865%5D&fields=link&fields=recordID&fields=timestamp&fields=pwa&fields=cer&fields=fulltext_org&fields=pageUUID&fields=editionUUID&fields=titleUUID&fields=editionId&fields=familyId&fields=newspaper_page&fields=newspaper_edition&fields=lplace&fields=location_name&fields=location_coordinates&max=-1&structure=header&structure=content&format=CSV"
+
+slesvig_1848_51 <- read_csv(link48_51)
+
+slesvig_1864_65 <- read_csv(link64_65)
+
+slesvig_1848_65 <- read_csv(link48_65)
+
+
+# Tokeniser og fjern stopord
+slesvig_tidy_1848_51 <- slesvig_1848_51 %>%
+  unnest_tokens(word, fulltext_org) %>%
+  anti_join(stopord_1800)
+
+slesvig_tidy_1864_65 <- slesvig_1864_65 %>% 
+  unnest_tokens(word, fulltext_org) %>% 
+  anti_join(stopord_1800)
+
+slesvig_tidy_1848_65 <- slesvig_1848_65 %>% 
+  unnest_tokens(word, fulltext_org) %>% 
+  anti_join(stopord_1800)
+```
+
+
+```{r sentiment analyse (dansih sentiment lexicon)}
+# Hente dansk sentimentordbog
+dansk_sentimentordbog <- read_csv("Data/2_headword_headword_polarity.csv")
+colnames(dansk_sentimentordbog) <- c("headword","homograh_number", "POS", "DDO_headword_ID", "polarity_label_headword", "list_of_word_forms")
+
+# Slå ordene op i sentimentordbogen
+sentiment_dansk_resultat <- slesvig_tidy_1848_65 %>% 
+  inner_join(dansk_sentimentordbog, by = c("word" = "headword")) %>% 
+  group_by(recordID) %>% 
+  summarise(sentiment_score = sum(polarity_label_headword, na.rm = TRUE))
+
+```
+
+```{r}
+# Timestamps er i datoformat
+slesvig_tidy_1848_65 <- slesvig_tidy_1848_65 %>% 
+  mutate(date = as_date(timestamp))
+
+# Join sentiment-score med datoer
+sentiment_plotdata_dansk <- sentiment_dansk_resultat %>%
+  left_join(slesvig_tidy_1848_65 %>% select(recordID, date), by ="recordID")
+```
+
+
+```{r}
+# Tilføj periode-information til dataene
+slesvig_tidy_1848_51 <- slesvig_tidy_1848_51 %>%
+  mutate(krig = "1848-1851", timestamp = ymd_hms(timestamp), month = floor_date(timestamp, "month"))
+
+slesvig_tidy_1864_65 <- slesvig_tidy_1864_65 %>%
+  mutate(krig = "1864-1865", timestamp = ymd_hms(timestamp), month = floor_date(timestamp, "month"))
+
+# Kombinér de to datasæt
+combined_sentiment_data_dansk <- bind_rows(slesvig_tidy_1848_51, slesvig_tidy_1864_65)
+
+# Slå op med sentimentordbogen og beregn sentiment-score
+combined_sentiment_scores_dansk <- combined_sentiment_data_dansk %>%
+  inner_join(dansk_sentimentordbog, by = c("word" = "headword")) %>%
+  group_by(month, krig) %>%
+  summarise(sentiment_score = sum(polarity_label_headword, na.rm = TRUE), .groups = "drop")
+
+# Visualisering af sentiment-sammenligning mellem de to perioder
+ggplot(combined_sentiment_scores_dansk, aes(x = month, y = sentiment_score, color = krig)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 1.5) +
+  labs(
+    title = "Sammenligning af månedlig sentiment-score for Slesvig-krigene (1848-1865)",
+    x = "Måned",
+    y = "Sentiment-score",
+    color = "Krigsperiode"
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c("1848-1851" = "blue", "1864-1865" = "darkred")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r sentiment_afinn}
+url <- "https://raw.githubusercontent.com/fnielsen/afinn/master/afinn/data/AFINN-da-32.txt"
+afinn_da <- read_delim(url, delim = "\t", col_names = c("word", "score"))
+
+slesvig_tidy_1848_65_afinn <- slesvig_tidy_1848_65 %>% 
+  inner_join(afinn_da, by = "word") %>% 
+  group_by(recordID) %>%
+  summarise(sentiment_score = sum(score), .groups = "drop")
+```
+
+
+```{r beregn_maanedlig_sentiment}
+slesvig_tidy_1848_65 <- slesvig_tidy_1848_65 %>% 
+  mutate(word = str_replace_all(word, "[[:punct:]]", ""))
+
+slesvig_sentiment_monthly <- slesvig_tidy_1848_65 %>%
+  mutate(timestamp = ymd_hms(timestamp),
+         month = floor_date(timestamp, "month")) %>%
+  inner_join(afinn_da, by = "word") %>%
+  group_by(month) %>%
+  summarise(sentiment_score = sum(score), .groups = "drop")
+```
+
+
+```{r visualisering}
+slesvig_sentiment_monthly <- slesvig_sentiment_monthly %>%
+  mutate(sentiment_color = ifelse(sentiment_score > 0, "forestgreen", "darkred"))
+
+# Visualisering med ggplot2
+library(ggplot2)
+
+ggplot(slesvig_sentiment_monthly, aes(x = month, y = sentiment_score, fill = sentiment_color)) +
+  geom_bar(stat = "identity") +
+  scale_fill_identity() +  
+  labs(title = "Månedlig Sentiment Score",
+       x = "Måned",
+       y = "Sentiment Score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+```{r sentiment over tid}
+ggplot(slesvig_sentiment_monthly, aes(x = month, y = sentiment_score)) +
+  geom_line(color = "orange") +
+  geom_point(color = "brown") +
+  theme_minimal() +
+  labs(
+    title = "Sentiment-score over tid (månedligt)",
+    x = "Måned",
+    y = "Samlet sentiment-score")
+```
+
+
+```{r Tilføj krigsperiode og datooplysninger}
+slesvig_tidy_1848_51 <- slesvig_tidy_1848_51 %>%
+  mutate(krig = "1848-1851",
+         timestamp = ymd_hms(timestamp),
+         month = floor_date(timestamp, "month"))
+
+slesvig_tidy_1864_65 <- slesvig_tidy_1864_65 %>%
+  mutate(krig = "1864-1865",
+         timestamp = ymd_hms(timestamp),
+         month = floor_date(timestamp, "month"))
+
+# Kombinér de to datasæt
+combined_sentiment_data <- bind_rows(slesvig_tidy_1848_51, slesvig_tidy_1864_65)
+```
+
+
+```{r Join med AFINN og beregn månedlig sentiment-score}
+combined_sentiment_scores <- combined_sentiment_data %>%
+  inner_join(afinn_da, by = "word") %>%
+  group_by(month, krig) %>%
+  summarise(sentiment_score = sum(score), .groups = "drop")
+```
+
+
+```{r Visualiser sammenligningen}
+ggplot(combined_sentiment_scores, aes(x = month, y = sentiment_score, color = krig)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 1.5) +
+  labs(
+    title = "Sammenligning af månedlig sentiment-score for Slesvig-krigene",
+    x = "Måned",
+    y = "Sentiment-score",
+    color = "Krigsperiode"
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c("1848-1851" = "blue", "1864-1865" = "darkred")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+# Tæl hyppigste ord i hver periode
+ord_frekvens_1848_51 <- slesvig_tidy_1848_51 %>%
+  count(word, sort = TRUE) %>%
+  top_n(20)
+
+ord_frekvens_1864_65 <- slesvig_tidy_1864_65 %>%
+  count(word, sort = TRUE) %>%
+  top_n(20)
+
+# Visualiser med barplot
+library(ggplot2)
+
+# Plot for 1848-1851
+ggplot(ord_frekvens_1848_51, aes(x = reorder(word, n), y = n)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 20 mest brugte ord (1848-1851)",
+       x = "Ord", y = "Forekomst") +
+  theme_minimal()
+
+# Plot for 1864-1865
+ggplot(ord_frekvens_1864_65, aes(x = reorder(word, n), y = n)) +
+  geom_col(fill = "firebrick") +
+  coord_flip() +
+  labs(title = "Top 20 mest brugte ord (1864-1865)",
+       x = "Ord", y = "Forekomst") +
+  theme_minimal()
+```
+
